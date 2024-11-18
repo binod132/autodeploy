@@ -1,0 +1,100 @@
+name: Deploy Application via Docker Compose
+
+on:
+  push:
+    branches:
+      - main  # Trigger the workflow for any tags like v1.0, v1.1, etc.
+
+jobs:
+  deploy:
+    runs-on: self-hosted  # Or use self-hosted if required
+
+    steps:
+      # Step 1: Checkout the code (to get the playbook, Python script, and any other necessary files)
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # Step 2: Set up Ansible (if you still need to install Docker & Docker Compose)
+      - name: Set up Ansible
+        uses: k3s-io/ansible-action@v2
+        with:
+          version: "latest"
+
+      # Step 3: Install Docker and Docker Compose on the remote VM using Ansible (if needed)
+      - name: Run Ansible Playbook to Install Docker and Docker Compose
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"  # Skip SSH key checking
+        run: |
+          ansible-playbook  ansible/docker.yml  # Path to your Ansible playbook
+
+      # Step 4: SCP the pull.py script to the remote VM
+      - name: SCP pull.py script to Remote VM
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}  # GitHub Secret with the SSH private key
+          SSH_USER: "ubuntu"  # The SSH user on the remote VM
+          VM_IP: "192.168.130.108"  # Remote VM's IP address
+        run: |
+          # Set up SSH to use private key
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $VM_IP >> ~/.ssh/known_hosts
+
+          # SCP the pull.py script to the VM
+          scp pull.py $SSH_USER@$VM_IP:/home/ubuntu/
+
+      # Step 5: SSH into the VM, run pull.py to clone GitLab repos
+      - name: SSH into VM and run pull.py to pull GitLab Repos
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_USER: "ubuntu"
+          VM_IP: "192.168.130.108"
+        run: |
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$VM_IP << 'EOF'
+            # Run pull.py to clone the repositories into the remote VM
+            cd /home/ubuntu/
+            python3 pull.py  # This will clone the repositories into /home/ubuntu/gitlab_repos/
+          EOF
+
+      # Step 6: SSH into VM and deploy services using docker-compose for each service folder
+      - name: SSH into VM and deploy services using docker-compose
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_USER: "ubuntu"
+          VM_IP: "192.168.130.108"
+        run: |
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$VM_IP << 'EOF'
+            # Navigate to the parent directory containing service folders
+            cd /home/ubuntu/gitlab_repos
+            # List of predefined folders that contain docker-compose.yml
+            service_folders=("account" "frontend-new" "lab" "patient-administration" "automation" "pharmacy" "user-management")
+            
+            # Loop through each folder and run docker-compose up
+            for folder in "${service_folders[@]}"; do
+              if [ -d "$folder" ]; then
+                echo "Deploying service from $folder"
+                cd "$folder"  # Change to the folder containing docker-compose.yml
+
+                # Run docker-compose up in detached mode
+                docker-compose down  # Stop any existing containers (if any)
+                docker-compose up -d  # Start the containers in detached mode
+                
+                # Echo a message indicating the service has been deployed
+                echo "Service deployed: $folder"
+              fi
+            done
+          EOF
+
+      # Step 7: Test if all Docker containers are running
+      - name: Test if all Docker containers are running
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_USER: "ubuntu"
+          VM_IP: "192.168.130.108"
+        run: |
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$VM_IP << 'EOF'
+            # Check if containers are running
+            echo "Checking if containers are running..."
+            docker ps -a  # List all running containers
+            # Add more checks here if needed, such as ensuring specific containers are running
+          EOF
