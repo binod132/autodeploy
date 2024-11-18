@@ -49,10 +49,12 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_USER: "ubuntu"
           VM_IP: "192.168.130.108"
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
         run: |
           ssh -o StrictHostKeyChecking=no $SSH_USER@$VM_IP << 'EOF'
             # Run pull.py to clone the repositories into the remote VM
             cd /home/ubuntu/
+            export GITLAB_TOKEN=${GITLAB_TOKEN}
             python3 pull.py  # This will clone the repositories into /home/ubuntu/gitlab_repos/
           EOF
 
